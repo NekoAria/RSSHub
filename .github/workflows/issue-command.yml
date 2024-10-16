@@ -140,12 +140,14 @@ jobs:
           TEST_BASEURL: http://localhost:1200
           TEST_ROUTES: ${{ steps.fetch-route.outputs.result }}
           EVENT: ${{ toJson(github.event) }}
+          PULL_REQUEST: ${{ steps.pr-data.outputs.data }}
         with:
           script: |
             const event = JSON.parse(process.env.EVENT)
+            const PR = JSON.parse(process.env.PULL_REQUEST)
             const link = process.env.TEST_BASEURL
             const routes = JSON.parse(process.env.TEST_ROUTES)
-            const number = event.issue.number
+            const number = PR.number
             core.info(`${link}, ${routes}, ${number}`)
 
             const { execSync } = require('child_process');
