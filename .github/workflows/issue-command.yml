@@ -149,6 +149,10 @@ jobs:
             const number = event.issue.number
             const PR = process.env.PULL_REQUEST ? JSON.parse(process.env.PULL_REQUEST) : null
             core.info(`${link}, ${routes}, ${number}`)
+
+            const { execSync } = require('child_process');
+            execSync('npm install js-beautify', { stdio: 'inherit' });
+
             const { default: test } = await import('${{ github.workspace }}/scripts/workflow/test-route/test.mjs')
             await test({ github, context, core }, link, routes, number, PR)
 
