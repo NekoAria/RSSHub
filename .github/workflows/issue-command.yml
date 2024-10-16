@@ -48,17 +48,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install pnpm
+      - name: Check if comment is on a pull request
+        id: check-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const isPullRequest = !!context.payload.issue.pull_request;
+            core.setOutput('is_pr', isPullRequest);
+            return isPullRequest;
+
+      - name: Install pnpm (for non-PR)
+        if: steps.check-pr.outputs.is_pr == 'false'
         uses: pnpm/action-setup@v4
 
-      - name: Use Node.js Active LTS
+      - name: Use Node.js Active LTS (for non-PR)
+        if: steps.check-pr.outputs.is_pr == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: 'pnpm'
 
-      - name: Install dependencies (pnpm)
+      - name: Install dependencies (for non-PR)
+        if: steps.check-pr.outputs.is_pr == 'false'
         run: pnpm i && pnpm rb
+
+      - name: Fetch PR data (for PR)
+        if: steps.check-pr.outputs.is_pr == 'true'
+        uses: octokit/request-action@v2.x
+        id: pr-data
+        with:
+          route: GET /repos/{repo}/pulls/{number}
+          repo: ${{ github.repository }}
+          number: ${{ github.event.issue.number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch Docker image (for PR)
+        if: steps.check-pr.outputs.is_pr == 'true'
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: docker-test.yml
+          name: docker-image
+          path: ../artifacts-${{ github.run_id }}
+
+      - name: Import Docker image and set up Docker container (for PR)
+        if: steps.check-pr.outputs.is_pr == 'true'
+        working-directory: ../artifacts-${{ github.run_id }}
+        run: |
+          set -ex
+          zstd -d --stdout rsshub.tar.zst | docker load
+          docker run -d \
+            --name rsshub \
+            -e NODE_ENV=dev \
+            -e LOGGER_LEVEL=debug \
+            -e ALLOW_USER_HOTLINK_TEMPLATE=true \
+            -e ALLOW_USER_SUPPLY_UNSAFE_DOMAIN=true \
+            -p 1200:1200 \
+            rsshub:latest
 
       - name: Fetch affected routes
         id: fetch-route
@@ -74,12 +120,12 @@ jobs:
             const { default: identify } = await import('${{ github.workspace }}/scripts/workflow/test-route/identify.mjs')
             return identify({ github, context, core }, body, number, sender)
 
-      - name: Build RSSHub
-        if: env.TEST_CONTINUE
+      - name: Build RSSHub (for non-PR)
+        if: env.TEST_CONTINUE && steps.check-pr.outputs.is_pr == 'false'
         run: pnpm build
 
-      - name: Start RSSHub
-        if: env.TEST_CONTINUE
+      - name: Start RSSHub (for non-PR)
+        if: env.TEST_CONTINUE && steps.check-pr.outputs.is_pr == 'false'
         run: pnpm start &
         env:
           ALLOW_USER_HOTLINK_TEMPLATE: true
@@ -94,19 +140,25 @@ jobs:
           TEST_BASEURL: http://localhost:1200
           TEST_ROUTES: ${{ steps.fetch-route.outputs.result }}
           EVENT: ${{ toJson(github.event) }}
+          PULL_REQUEST: ${{ steps.pr-data.outputs.data }}
         with:
           script: |
             const event = JSON.parse(process.env.EVENT)
             const link = process.env.TEST_BASEURL
             const routes = JSON.parse(process.env.TEST_ROUTES)
             const number = event.issue.number
+            const PR = process.env.PULL_REQUEST ? JSON.parse(process.env.PULL_REQUEST) : null
             core.info(`${link}, ${routes}, ${number}`)
             const { default: test } = await import('${{ github.workspace }}/scripts/workflow/test-route/test.mjs')
-            await test({ github, context, core }, link, routes, number)
+            await test({ github, context, core }, link, routes, number, PR)
 
-      - name: Print logs
-        if: (env.TEST_CONTINUE)
-        run: cat ${{ github.workspace }}/logs/combined.log
+      - name: Print logs (for non-PR)
+        if: env.TEST_CONTINUE && steps.check-pr.outputs.is_pr == 'false'
+        run: cat
+
+      - name: Print Docker container logs (for PR)
+        if: env.TEST_CONTINUE && steps.check-pr.outputs.is_pr == 'true'
+        run: docker logs rsshub
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
